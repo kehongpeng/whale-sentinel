@@ -45,9 +45,14 @@ export async function GET(request: Request) {
       } catch (err: any) {
         return {
           symbol,
-          error: err.message || "Unknown error",
+          price: 0,
+          oi: 0,
+          fundingRate: 0,
+          topLongRatio: 0,
           stage: "UNKNOWN",
           confidence: 0,
+          reasons: [err.message || "数据获取失败"],
+          error: err.message || "Unknown error",
         };
       }
     })
