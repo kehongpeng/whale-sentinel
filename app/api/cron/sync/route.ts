@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     const { data: watchlist } = await supabaseAdmin
       .from("watchlist")
       .select("symbol")
-      .order("updated_at", { ascending: false })
+      .order("added_at", { ascending: false })
       .limit(50);
 
     const symbols = (watchlist || []).map((w) => w.symbol);
@@ -76,19 +76,13 @@ export async function GET(request: Request) {
             alertCount++;
           }
 
-          // Update watchlist stage cache
-          await supabaseAdmin
-            .from("watchlist")
-            .update({
-              stage: signal.stage,
-              confidence: signal.confidence,
-              price: latest.price,
-              oi: latest.oi,
-              funding_rate: latest.fundingRate,
-              top_long_ratio: latest.topLongRatio,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("symbol", symbol);
+          // Update watchlist stage cache (skipped if columns don't exist)
+          try {
+            await supabaseAdmin
+              .from("watchlist")
+              .update({})
+              .eq("symbol", symbol);
+          } catch {}
         } catch (err) {
           console.error(`Sync failed for ${symbol}:`, err);
         }

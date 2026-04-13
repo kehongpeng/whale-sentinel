@@ -5,6 +5,7 @@ import { WatchCard } from "@/components/WatchCard";
 import type { AlertRecord } from "@/lib/types";
 
 const DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT"];
+const LOCAL_ALERTS_KEY = "whale_sentinel_alerts_v1";
 
 interface MarketItem {
   symbol: string;
@@ -18,6 +19,33 @@ interface MarketItem {
   error?: string;
 }
 
+function getLocalAlerts(): AlertRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(LOCAL_ALERTS_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function setLocalAlerts(alerts: AlertRecord[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(LOCAL_ALERTS_KEY, JSON.stringify(alerts.slice(0, 50)));
+  } catch {}
+}
+
+function mergeAlert(alerts: AlertRecord[], record: AlertRecord): AlertRecord[] {
+  const exists = alerts.some(
+    (a) =>
+      a.symbol === record.symbol &&
+      a.stage === record.stage &&
+      Math.abs(new Date(a.created_at).getTime() - new Date(record.created_at).getTime()) < 60000
+  );
+  if (exists) return alerts;
+  return [record, ...alerts];
+}
+
 export default function HomePage() {
   const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
   const [data, setData] = useState<MarketItem[]>([]);
@@ -29,16 +57,41 @@ export default function HomePage() {
   const fetchData = async () => {
     setLoading(true);
     setErrorMsg(null);
+    let fetched: MarketItem[] = [];
     try {
       const res = await fetch(`/api/market-data?symbols=${symbols.join(",")}`);
       const json = await res.json();
-      setData(json.data || []);
+      fetched = json.data || [];
+      setData(fetched);
     } catch (err) {
       console.error("Fetch market data failed:", err);
       setErrorMsg("数据加载失败，请检查网络或浏览器扩展拦截");
     } finally {
       setLoading(false);
     }
+
+    // Local alert fallback: emit high-confidence signals to localStorage
+    if (typeof window !== "undefined") {
+      const localAlerts = getLocalAlerts();
+      let updated = localAlerts;
+      for (const item of fetched) {
+        if (item.stage !== "UNKNOWN" && item.confidence >= 0.75) {
+          updated = mergeAlert(updated, {
+            id: `${item.symbol}-${Date.now()}`,
+            symbol: item.symbol,
+            stage: item.stage,
+            confidence: item.confidence,
+            reasons: item.reasons,
+            created_at: new Date().toISOString(),
+          } as AlertRecord);
+        }
+      }
+      if (updated.length !== localAlerts.length) {
+        setLocalAlerts(updated);
+        setAlerts(updated);
+      }
+    }
+
     // sync alerts in background so Supabase failures don't block UI
     fetchAlerts().catch(() => {});
   };
@@ -48,13 +101,23 @@ export default function HomePage() {
       const res = await fetch("/api/alert?limit=20");
       if (!res.ok) return;
       const json = await res.json();
-      setAlerts(json.data || []);
+      const apiAlerts: AlertRecord[] = json.data || [];
+      // If API returns empty on localhost, fall back to localStorage
+      if (apiAlerts.length === 0 && typeof window !== "undefined" && window.location.hostname === "localhost") {
+        setAlerts(getLocalAlerts());
+      } else {
+        setAlerts(apiAlerts);
+      }
     } catch {
       // silently ignore alert fetch failures in dev/local
+      if (typeof window !== "undefined" && window.location.hostname === "localhost") {
+        setAlerts(getLocalAlerts());
+      }
     }
   };
 
   useEffect(() => {
+    setAlerts(getLocalAlerts());
     fetchData();
     const id = setInterval(fetchData, 20000);
     return () => clearInterval(id);
